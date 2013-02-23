@@ -229,14 +229,30 @@ class APNContext
     delete @_activeContexts[acc._id]
 
 schema = db.Schema
-  udid: String
-  user_id: String
-  device_token: String
-  oauth_token: String
-  oauth_secret: String
-  consumer_token: String
-  consumer_secret: String
-  flags: db.Schema.Types.Mixed
+  udid:
+    type: String
+    required: true
+  user_id:
+    type: String
+    required: true
+  device_token:
+    type: String
+    required: true
+  oauth_token:
+    type: String
+    required: true
+  oauth_secret:
+    type: String
+    required: true
+  consumer_token:
+    type: String
+    required: true
+  consumer_secret:
+    type: String
+    required: true
+  flags:
+    type: db.Schema.Types.Mixed
+    required: true
 
 schema.index user_id:1,udid:1, unique: true
 
