@@ -8,6 +8,8 @@ express = require 'express'
 
 config = require '../config'
 
+db.connect config.db or "mongodb://air:27017/ffapn"
+
 class StreamContext extends events.EventEmitter
   constructor: (@options) ->
     @_stop = false
@@ -62,7 +64,13 @@ class StreamContext extends events.EventEmitter
 
 class APNContext
 
+  
+
   constructor: (@options) ->
+    @_status =
+      sentNotifications: 0
+      lastNotification: 0
+
     @_stream = new StreamContext @options
     @_device = new apns.Device @options.device_token
     
@@ -80,6 +88,9 @@ class APNContext
 
   start: () ->
     @_stream.start()
+
+  stop: () ->
+    @_stream.stop()
 
   onMessage: (evt) =>
     #Filter out events triggered by user
@@ -164,7 +175,7 @@ class APNContext
     note.encoding = 'ucs2'
     note.expiry = Math.floor(Date.now() / 1000) + 3600
     note.badge = 1
-    note.sound = "ping.aiff"
+    note.sound = "default"
     note.alert = msg
     note.payload = payload
     note.device = @device
@@ -172,6 +183,8 @@ class APNContext
     note._ctx = this
 
     APNContext._conn.sendNotification(note)
+    @_status.sentNotifications += 1
+    @_status.lastNotification = Date.now()
     
   @_conn: new apns.Connection config.apn or {
     cert: 'gohan_apns_development.crt'
@@ -181,6 +194,20 @@ class APNContext
 
   @_activeContexts: {}
  
+  @sendTestNotification: (acc)->
+    if ctx = @_activeContexts[acc._id]
+      msg =
+        'loc-key': 'TEST_NOTIFICATION_MESSAGE'
+        'loc-args': []
+      info =
+        type: 'test'
+        id: Date.now()
+
+      ctx.sendNotification msg,info
+      return true
+    else
+      return false
+
   @updateOrCreate: (acc) ->
     if ctx = @_activeContexts[acc._id]
       ctx.update(acc)
@@ -188,6 +215,11 @@ class APNContext
       ctx = new @(acc)
       @_activeContexts[id] = ctx
       ctx.start()
+
+  @removeContext: (acc) ->
+    if ctx = @_activeContexts[acc._id]
+      ctx.stop()
+    delete @_activeContexts[acc._id]
 
 schema = db.Schema
   udid: String
@@ -201,12 +233,23 @@ schema = db.Schema
 
 schema.index user_id:1,udid:1, unique: true
 
+schema.post 'save',(doc) ->
+  APNContext.updateOrCreate doc
+
+schema.post 'remove',(doc) ->
+  APNContext.removeContext doc
+
+schema.virtual('status').get () ->
+  @getContext._status
+
+schema.methods.getContext = () ->
+  APNContext._activeContexts[@_id]
+
 schema.methods.updateProp = (props) ->
   @schema.eachPath (name) =>
     @[name] = props[name] if props.hasOwnProperty name
 
 Account = db.model 'Account',schema
-
 
 app = new express
 app.enable 'trust proxy'
@@ -217,6 +260,36 @@ app.use express.bodyParser()
 app.get '/', (req,resp) ->
   resp.redirect 'http://imach.me/gohanapp'
 
+app.get '/test/:token', (req,resp) ->
+    note = new apns.Notification()
+    note.encoding = 'ucs2'
+    note.expiry = Math.floor(Date.now() / 1000) + 3600
+    note.badge = 1
+    note.sound = "default"
+    note.alert = msg
+    note.payload = payload
+    note.device = new apn.Device(req.params.token)
+
+    APNContext._conn.sendNotification(note)
+    resp.send {msg:"ok"}
+
+app.get '/token/:udid/:user_id', (req,resp) ->
+  c = {udid: req.params.udid, user_id: req.param.user_id}
+  Account.findOne c, (err,obj) ->
+    return resp.send 500,err if err
+    return resp.send 404,{msg: 'Not found'} unless obj
+    resp.json obj
+
+app.get '/token/:udid/:user_id/test', (req,resp) ->
+  c = {udid: req.params.udid, user_id: req.param.user_id}
+  Account.findOne c, (err,obj) ->
+    return resp.send 500,err if err
+    return resp.send 404,{msg: 'Not found'} unless obj
+    if APNContext.sendTestNotification obj
+      return resp.json {msg: "ok"}
+    else
+      return resp.json {msg: "failed"}
+
 app.post '/token/:udid/:user_id', (req,resp) ->
   c = {udid: req.params.udid, user_id: req.param.user_id}
   Account.findOne c, (err,obj) ->
@@ -225,7 +298,7 @@ app.post '/token/:udid/:user_id', (req,resp) ->
     obj.updateProps req.body
     obj.save (err, obj) ->
       return resp.send 500,err if err
-      APNContext.updateOrCreate obj
+      
       return resp.send 200,obj
 
 app.delete '/token/:udid/:user_id', (req,resp) ->
@@ -235,4 +308,11 @@ app.delete '/token/:udid/:user_id', (req,resp) ->
     return resp.send 404,{msg: 'Not found'} unless obj
     obj.remove()
 
-app.listen config.port or 8080, config.bind or "127.0.0.1"
+Account.find (err,arr) ->
+  console.info err if err
+  if arr
+    console.info "Loading accounts: #{arr.length}"
+    APNContext.updateOrCreate obj for obj in arr
+
+  console.info "Server started"
+  app.listen config.port or 8080, config.bind or "127.0.0.1"
