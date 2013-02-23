@@ -1,0 +1,15 @@
+*~
+.*
+*.swp
+*.log
+.idea
+lib
+bin
+node_modules
+.DS_Store
+config.js
+test
+src/*.js
+*.key
+*.crt
+*.pem
