@@ -261,6 +261,15 @@ app.get '/', (req,resp) ->
   resp.redirect 'http://imach.me/gohanapp'
 
 app.get '/test/:token', (req,resp) ->
+    msg =
+      'loc-key': 'FR'
+      'loc-args': [
+        evt.source.name,
+      ]
+    info =
+      type: 'fr'
+      id: evt.source.id
+      user: @options.user_id
     note = new apns.Notification()
     note.encoding = 'ucs2'
     note.expiry = Math.floor(Date.now() / 1000) + 3600
