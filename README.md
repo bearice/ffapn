@@ -33,7 +33,7 @@ Content-type: application/json
 	"oauth_secret":"222",
 	"consumer_token":"333",
 	"consumer_secret":"444",
-	"options": {
+	"flags": {
 		"mention":true,
 		"direct_message":true,
 		"favourite":true,

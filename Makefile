@@ -1,7 +1,7 @@
 NPM=npm
 NODE=node
 
-COFFEE=node_modules/coffee-script/bin/coffee
+COFFEE=coffee
 
 TARGETS = $(patsubst src/%.coffee,lib/%.js,$(shell find src -name \*.coffee))
 

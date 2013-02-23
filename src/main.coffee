@@ -82,7 +82,7 @@ class APNContext
   onMessage: (evt) =>
     #Filter out events triggered by user
     return unless evt.target.id == @options.user_id
-    return unless @options.options.mention
+    return unless @options.flags.mention
     msg =
       'loc-key': 'AT'
       'loc-args': [
@@ -98,7 +98,7 @@ class APNContext
   onPrivateMessage: (evt) =>
     #Filter out events triggered by user
     return unless evt.target.id == @options.user_id
-    return unless @options.options.direct_message
+    return unless @options.flags.direct_message
     msg =
       'loc-key': 'DM'
       'loc-args': [
@@ -114,7 +114,7 @@ class APNContext
   onFavourite: (evt) =>
     #Filter out events triggered by user
     return unless evt.target.id == @options.user_id
-    return unless @options.options.favourite
+    return unless @options.flags.favourite
     msg =
       'loc-key': 'FAV'
       'loc-args': [
@@ -130,7 +130,7 @@ class APNContext
   onNewFollower: (evt) =>
     #Filter out events triggered by user
     return unless evt.target.id == @options.user_id
-    return unless @options.options.follow_create
+    return unless @options.flags.follow_create
     msg =
       'loc-key': 'NF'
       'loc-args': [
@@ -145,7 +145,7 @@ class APNContext
   onFriendRequest: (evt) =>
     #Filter out events triggered by user
     return unless evt.target.id == @options.user_id
-    return unless @options.options.follow_request
+    return unless @options.flags.follow_request
     msg =
       'loc-key': 'FR'
       'loc-args': [
@@ -194,7 +194,7 @@ schema = db.Schema
   oauth_secret: String
   consumer_token: String
   consumer_secret: String
-  options: db.Schema.Types.Mixed
+  flags: db.Schema.Types.Mixed
 
 schema.index user_id:1,udid:1, unique: true
 
@@ -232,3 +232,4 @@ app.delete '/token/:udid/:user_id', (req,resp) ->
     return resp.send 404,{msg: 'Not found'} unless obj
     obj.remove()
 
+app.listen 8080,'0.0.0.0'
