@@ -17,27 +17,30 @@ class StreamContext extends events.EventEmitter
   _makeRequest: () ->
     oauth = new OAuth null, null, @options.consumer_token, @options.consumer_secret, "1.0", null, "HMAC-SHA1"
     oauth_header = oauth.authHeader 'http://stream.fanfou.com/1/user.json', @options.oauth_token, @options.oauth_secret
-    console.info @options
-    console.info oauth_header
     http.request
+      agent: false
       host: 'stream.fanfou.com'
       path: '/1/user.json'
       headers:
         'Authorization': oauth_header
       
-
   _onResponse: (resp)=>
+    @_resp = resp
     @lastChunk = ""
     if resp.statusCode != 200
+      console.info "Stream NOT connected for #{@options.udid}/#{@options.user_id} Got HTTP #{resp.statusCode}"
       @emit 'error', new Error("Bad HTTP status code returned: #{resp.statusCode}")
       return
 
+    console.info "Stream connected for #{@options.udid}/#{@options.user_id}"
+    @emit 'connect',this
+
     resp.setEncoding 'utf8'
     resp.on 'close',->
+      @emit 'disconnect', this
       setTimeout @start,0
 
     resp.on 'data',(data) =>
-      console.info data.length
       @lastChunk += data
       while (pos = @lastChunk.indexOf('\r\n')) >= 0
         chunk = @lastChunk.substr(0,pos)
@@ -53,6 +56,7 @@ class StreamContext extends events.EventEmitter
         return
 
   _dispatch: (data)=>
+    @emit 'data',data
     @emit data.event, data
 
   start: () =>
@@ -63,14 +67,13 @@ class StreamContext extends events.EventEmitter
 
   stop: ()->
     @_stop = true
-    @_resp.destroy()
+    @_resp?.destroy()
 
 class APNContext
-
-  
-
   constructor: (@options) ->
     @_status =
+      streamConnected: false
+      lastError: null
       sentNotifications: 0
       lastNotification: 0
 
@@ -83,8 +86,12 @@ class APNContext
     @_stream.on 'fav.create', @onFavourite
     @_stream.on 'dm.create', @onPrivateMessage
 
-    @_stream.on 'error', (err) ->
-      console.error err
+    @_stream.on 'connect', () =>
+      @_status.streamConnected = true
+
+    @_stream.on 'error', (err) =>
+      @_status.streamConnected = false
+      @_status.lastError = err
 
   update: (@options) ->
     @_stream.options = @options
@@ -186,18 +193,25 @@ class APNContext
     note._ctx = this
 
     #console.info note
-    console.info "size: "+ (new Buffer(JSON.stringify(note),"utf8")).length
+    console.info "user: #{@options.user_id} type:#{payload.type} size: "+ (new Buffer(JSON.stringify(note),"utf8")).length
     APNContext._conn.sendNotification(note)
     @_status.sentNotifications += 1
     @_status.lastNotification = Date.now()
     
   @_conn: new apns.Connection {
-    cert: 'gohan_apns_development.crt'
-    key: 'gohan_apns_development.key'
-    gateway: 'gateway.sandbox.push.apple.com'
+      #cert: 'gohan_apns_development.crt'
+      #key: 'gohan_apns_development.key'
+      #gateway: 'gateway.sandbox.push.apple.com'
+    cert: 'gohan_apns_production.crt'
+    key: 'gohan_apns_production.key'
+    gateway: 'gateway.push.apple.com'
     errorCallback: (err,notify)->
         console.info "Error: #{err} "
         console.info JSON.stringify notify
+        if notify?.ctx
+          notify.ctx._status.lastError = "APNServer error: "+ err
+          #if err == 8
+          #  notify.ctx.stop()
 
   }
 
@@ -219,8 +233,10 @@ class APNContext
 
   @updateOrCreate: (acc) ->
     if ctx = @_activeContexts[acc._id]
+      console.info "Update settings for #{acc.udid}/#{acc.user_id}..."
       ctx.update(acc)
     else
+      console.info "Try to connect #{acc.udid}/#{acc.user_id}..."
       ctx = new @(acc)
       @_activeContexts[acc._id] = ctx
       ctx.start()
@@ -249,7 +265,7 @@ schema.post 'remove',(doc) ->
   APNContext.removeContext doc
 
 schema.virtual('status').get () ->
-  @getContext._status
+  @getContext()._status
 
 schema.methods.getContext = () ->
   APNContext._activeContexts[@_id]
@@ -258,6 +274,17 @@ schema.methods.updateProps = (props) ->
   @schema.eachPath (name) =>
     @[name] = props[name] if props.hasOwnProperty name
 
+schema.methods.toJSON = ()->
+  id: @_id
+  udid: @_udid
+  user_id: @user_id
+  device_token: @device_token
+  oauth_token: @oauth_token
+  oauth_secret: @oauth_secret
+  consumer_token: @consumer_token
+  consumer_secret: @consumer_secret
+  flags: @flags
+  status: @status
 Account = db.model 'Account',schema
 
 app = new express
@@ -267,7 +294,7 @@ app.use express.logger 'dev'
 app.use express.bodyParser()
 
 app.get '/', (req,resp) ->
-  resp.redirect 'http://imach.me/gohanapp'
+  resp.redirect 'https://github.com/bearice/ffapn'
 
 app.get '/test/:token', (req,resp) ->
     msg =
@@ -292,6 +319,7 @@ app.get '/token/:udid/:user_id', (req,resp) ->
   Account.findOne c, (err,obj) ->
     return resp.send 500,err if err
     return resp.send 404,{msg: 'Not found'} unless obj
+    console.info obj.status
     resp.json obj
 
 app.get '/token/:udid/:user_id/test', (req,resp) ->
@@ -313,7 +341,6 @@ app.post '/token/:udid/:user_id', (req,resp) ->
     obj.updateProps req.body
     obj.save (err, obj) ->
       return resp.send 500,err if err
-      
       return resp.send 200,obj
 
 app.delete '/token/:udid/:user_id', (req,resp) ->
@@ -327,7 +354,10 @@ Account.find (err,arr) ->
   console.info err if err
   if arr
     console.info "Loading accounts: #{arr.length}"
-    APNContext.updateOrCreate obj for obj in arr
+    delay = 0
+    for obj in arr
+      setTimeout APNContext.updateOrCreate.bind(APNContext,obj) ,delay
+      delay += 10
 
   console.info "Server started"
   app.listen config.port or 8080, config.bind or "127.0.0.1"
