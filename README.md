@@ -18,7 +18,9 @@ Return push context status
 
 Create a new push context, or modify a existing context.
 
-Arguments passed in post payload, can be JSON or www-formencoded
+Arguments passed in post payload, content-type should be application/json
+
+look at the example below:
 
 ```
 POST /token/1234567890/test
