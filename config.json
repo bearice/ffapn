@@ -1,0 +1,9 @@
+{
+	"port":8080,
+	"bind":"127.0.0.1",
+    "apn":{
+        "cert": "gohan_apns_development.crt",
+        "key": "gohan_apns_development.key",
+        "gateway": "gateway.sandbox.push.apple.com"
+    }
+}

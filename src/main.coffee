@@ -6,6 +6,8 @@ db = require 'mongoose'
 express = require 'express'
 {OAuth} = require 'oauth'
 
+config = require '../config'
+
 class StreamContext extends events.EventEmitter
   constructor: (@options) ->
     @_stop = false
@@ -152,7 +154,7 @@ class APNContext
         evt.source.name,
       ]
     info =
-      type: 'fav'
+      type: 'fr'
       id: evt.source.id
       user: @options.user_id
     @sendNotification msg, info
@@ -171,10 +173,11 @@ class APNContext
 
     APNContext._conn.sendNotification(note)
     
-  @_conn: new apns.Connection
+  @_conn: new apns.Connection config.apn or {
     cert: 'gohan_apns_development.crt'
     key: 'gohan_apns_development.key'
     gateway: 'gateway.sandbox.push.apple.com'
+  }
 
   @_activeContexts: {}
  
@@ -232,4 +235,4 @@ app.delete '/token/:udid/:user_id', (req,resp) ->
     return resp.send 404,{msg: 'Not found'} unless obj
     obj.remove()
 
-app.listen 8080,'0.0.0.0'
+app.listen config.port or 8080, config.bind or "127.0.0.1"
