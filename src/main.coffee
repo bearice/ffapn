@@ -27,8 +27,8 @@ class StreamContext extends events.EventEmitter
       
 
   _onResponse: (resp)=>
-    @_lastChunk = ""
-    if resp.code != 200
+    @lastChunk = ""
+    if resp.statusCode != 200
       @emit 'error', new Error("Bad HTTP status code returned: #{resp.statusCode}")
       return
 
@@ -36,10 +36,10 @@ class StreamContext extends events.EventEmitter
     resp.on 'close',->
       setTimeout @start,0
 
-    resp.on 'data',(data)->
+    resp.on 'data',(data) =>
       console.info data.length
       @lastChunk += data
-      while (pos = lastChunk.indexOf('\r\n')) >= 0
+      while (pos = @lastChunk.indexOf('\r\n')) >= 0
         chunk = @lastChunk.substr(0,pos)
         @lastChunk = @lastChunk.substr(pos+2)
         if chunk != ""
@@ -48,7 +48,8 @@ class StreamContext extends events.EventEmitter
             console.info obj.event
             @_dispatch obj
           catch e
-            console.error chunk,e
+            console.info obj
+            throw e
         return
 
   _dispatch: (data)=>
@@ -96,13 +97,13 @@ class APNContext
 
   onMessage: (evt) =>
     #Filter out events triggered by user
-    return unless evt.target.id == @options.user_id
+    return if evt.source.id == @options.user_id
     return unless @options.flags.mention
     msg =
       'loc-key': 'AT'
       'loc-args': [
         evt.source.name,
-        evt.object.content.substr(0,40)
+        evt.object.text.substr(0,40)
       ]
     info =
       type: 'at'
@@ -118,7 +119,7 @@ class APNContext
       'loc-key': 'DM'
       'loc-args': [
         evt.source.name,
-        evt.object.content.substr(0,40)
+        evt.object.text.substr(0,40)
       ]
     info =
       type: 'dm'
@@ -134,7 +135,7 @@ class APNContext
       'loc-key': 'FAV'
       'loc-args': [
         evt.source.name,
-        evt.object.content.substr(0,40)
+        evt.object.text.substr(0,40)
       ]
     info =
       type: 'fav'
@@ -180,11 +181,12 @@ class APNContext
     note.sound = "default"
     note.alert = msg
     note.payload = payload
-    note.device = @device
+    note.device = @_device
     note._id = @options._id
     note._ctx = this
 
-    console.info new Buffer(JSON.stringify(note),"utf8")
+    #console.info note
+    console.info "size: "+ (new Buffer(JSON.stringify(note),"utf8")).length
     APNContext._conn.sendNotification(note)
     @_status.sentNotifications += 1
     @_status.lastNotification = Date.now()
