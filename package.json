@@ -1,0 +1,20 @@
+{
+    "name": "ffapn",
+    "description": "APN server for fanfou.com",
+    "version": "0.1.0",
+    "author": [
+        {
+            "name": "Bearice Ren",
+            "email": "bearice@gmail.com"
+        }
+    ],
+    "dependencies": {
+        "apn": ">=1.2.5",
+        "oauth":">=0.9.8",
+        "mongoose":">=3.5.5"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git://github.com/bearice/ffapn.git"
+    }
+}
