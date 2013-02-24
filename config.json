@@ -3,8 +3,8 @@
 	"bind":"127.0.0.1",
     "db":"mongodb://lion:27017/ffapn",
     "apn":{
-        "cert": "gohan_apns_development.crt",
-        "key": "gohan_apns_development.key",
-        "gateway": "gateway.sandbox.push.apple.com"
+        "cert": "gohan_apns_production.crt",
+        "key": "gohan_apns_production.key",
+        "gateway": "gateway.push.apple.com"
     }
 }

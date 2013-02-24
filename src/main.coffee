@@ -95,6 +95,7 @@ class APNContext
 
   update: (@options) ->
     @_stream.options = @options
+    @_device = new apns.Device @options.device_token
 
   start: () ->
     @_stream.start()
@@ -192,29 +193,35 @@ class APNContext
     note._id = @options._id
     note._ctx = this
 
+    #trim msg body
+    size = note.length()
+    while size > 255
+      str = msg['loc-args'][1]
+      msg['loc-args'][1] = str.substr(0,str.length-1)
+      size = note.length()
+
     #console.info note
-    console.info "user: #{@options.user_id} type:#{payload.type} size: "+ (new Buffer(JSON.stringify(note),"utf8")).length
+    console.info "user: #{@options.user_id} type:#{payload.type} size: #{size}"
     APNContext._conn.sendNotification(note)
     @_status.sentNotifications += 1
     @_status.lastNotification = Date.now()
     
-  @_conn: new apns.Connection {
-      #cert: 'gohan_apns_development.crt'
-      #key: 'gohan_apns_development.key'
-      #gateway: 'gateway.sandbox.push.apple.com'
+  config.apn or= {
     cert: 'gohan_apns_production.crt'
     key: 'gohan_apns_production.key'
     gateway: 'gateway.push.apple.com'
-    errorCallback: (err,notify)->
-        console.info "Error: #{err} "
-        console.info JSON.stringify notify
-        if notify?.ctx
-          notify.ctx._status.lastError = "APNServer error: "+ err
-          #if err == 8
-          #  notify.ctx.stop()
-
   }
 
+  @handleAPNError : (err,notify)=>
+    console.info "Error: #{err}"
+    console.info JSON.stringify notify
+    if notify?._ctx
+      notify._ctx._status.lastError = "APNServer error: "+ err
+      if err == 8
+        @removeContext notify._ctx.options
+
+  config.apn.errorCallback = @handleAPNError.bind(APNContext)
+  @_conn: new apns.Connection config.apn
   @_activeContexts: {}
  
   @sendTestNotification: (acc)->
@@ -242,6 +249,7 @@ class APNContext
       ctx.start()
 
   @removeContext: (acc) ->
+    console.info "Removing context #{acc.udid}/#{acc.user_id}..."
     if ctx = @_activeContexts[acc._id]
       ctx.stop()
     delete @_activeContexts[acc._id]
@@ -281,7 +289,7 @@ schema.post 'remove',(doc) ->
   APNContext.removeContext doc
 
 schema.virtual('status').get () ->
-  @getContext()._status
+  @getContext()?._status or "Context removed or not exist"
 
 schema.methods.getContext = () ->
   APNContext._activeContexts[@_id]
@@ -335,7 +343,6 @@ app.get '/token/:udid/:user_id', (req,resp) ->
   Account.findOne c, (err,obj) ->
     return resp.send 500,err if err
     return resp.send 404,{msg: 'Not found'} unless obj
-    console.info obj.status
     resp.json obj
 
 app.get '/token/:udid/:user_id/test', (req,resp) ->
