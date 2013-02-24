@@ -6,7 +6,7 @@ The missing push support for fanfou.com
 API Interface
 ---
 
-Client should HTTP API to register or remove push contexts
+Client should use HTTP API to register or remove push contexts
 
 ###GET /token/:udid/:user_id
 
