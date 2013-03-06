@@ -52,7 +52,7 @@ class StreamContext extends events.EventEmitter
             @_dispatch obj
           catch e
             console.info obj
-            throw e
+            console.info e.stack
         return
 
   _dispatch: (data)=>
