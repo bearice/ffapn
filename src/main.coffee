@@ -8,6 +8,8 @@ express = require 'express'
 
 config = require '../config'
 
+html = new (require 'node-html-encoder').Encoder
+
 db.connect config.db or "mongodb://air:27017/ffapn"
 
 class StreamContext extends events.EventEmitter
@@ -107,11 +109,12 @@ class APNContext
     #Filter out events triggered by user
     return if evt.source.id == @options.user_id
     return unless @options.flags.mention
+    body = html.htmlDecode evt.object.text
     msg =
       'loc-key': 'AT'
       'loc-args': [
         evt.source.name,
-        evt.object.text.substr(0,40)
+        body.substr(0,40)
       ]
     info =
       type: 'at'
@@ -123,11 +126,12 @@ class APNContext
     #Filter out events triggered by user
     return unless evt.target.id == @options.user_id
     return unless @options.flags.direct_message
+    body = html.htmlDecode evt.object.text
     msg =
       'loc-key': 'DM'
       'loc-args': [
         evt.source.name,
-        evt.object.text.substr(0,40)
+        body.substr(0,40)
       ]
     info =
       type: 'dm'
@@ -139,15 +143,16 @@ class APNContext
     #Filter out events triggered by user
     return unless evt.target.id == @options.user_id
     return unless @options.flags.favourite
+    body = html.htmlDecode evt.object.text
     msg =
       'loc-key': 'FAV'
       'loc-args': [
         evt.source.name,
-        evt.object.text.substr(0,40)
+        body.substr(0,40)
       ]
     info =
       type: 'fav'
-      id: evt.object.id
+      id: evt.source.id
       user: @options.user_id
     @sendNotification msg, info
 
