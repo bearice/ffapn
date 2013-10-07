@@ -12,6 +12,19 @@ html = new (require 'node-html-encoder').Encoder
 
 db.connect config.db or "mongodb://air:27017/ffapn"
 
+_status =
+  boot_time: (new Date).valueOf()
+  users: 0
+  live_users: 0
+  messages: 0
+  pushed_messages: 0
+  errors: 0
+  connected_streams: 0
+
+getStatus = (fn) ->
+  _status.uptime = (new Date).valueOf() - _status.boot_time
+  fn _status
+
 class StreamContext extends events.EventEmitter
   constructor: (@options) ->
     @_stop = false
@@ -36,9 +49,11 @@ class StreamContext extends events.EventEmitter
 
     console.info "Stream connected for #{@options.udid}/#{@options.user_id}"
     @emit 'connect',this
+    _status.connected_streams++
 
     resp.setEncoding 'utf8'
     resp.on 'close',->
+      _status.connected_streams--
       @emit 'disconnect', this
       setTimeout @start,0
 
@@ -51,9 +66,10 @@ class StreamContext extends events.EventEmitter
           try
             obj = JSON.parse chunk
             console.info obj.event
+            _status.messages++
             @_dispatch obj
           catch e
-            console.info obj
+            console.info chunk
             console.info e.stack
         return
 
@@ -100,9 +116,11 @@ class APNContext
     @_device = new apns.Device @options.device_token
 
   start: () ->
+    _status.live_users++
     @_stream.start()
 
   stop: () ->
+    _status.live_users--
     @_stream.stop()
 
   onMessage: (evt) =>
@@ -154,7 +172,7 @@ class APNContext
       type: 'fav'
       id: evt.source.id
       user: @options.user_id
-    @sendNotification msg, info
+    @sendNotification msg, info, 0
 
   onNewFollower: (evt) =>
     #Filter out events triggered by user
@@ -169,7 +187,7 @@ class APNContext
       type: 'nf'
       id: evt.source.id
       user: @options.user_id
-    @sendNotification msg, info
+    @sendNotification msg, info, 0
 
   onFriendRequest: (evt) =>
     #Filter out events triggered by user
@@ -186,11 +204,11 @@ class APNContext
       user: @options.user_id
     @sendNotification msg, info
 
-  sendNotification: (msg,payload) ->
+  sendNotification: (msg,payload,badge=1) ->
     note = new apns.Notification()
     note.encoding = 'utf8'
     note.expiry = Math.floor(Date.now() / 1000) + 3600
-    note.badge = 1
+    note.badge = badge
     note.sound = "default"
     note.alert = msg
     note.payload = payload
@@ -210,6 +228,7 @@ class APNContext
     APNContext._conn.sendNotification(note)
     @_status.sentNotifications += 1
     @_status.lastNotification = Date.now()
+    _status.pushed_messages++
     
   config.apn or= {
     cert: 'gohan_apns_production.crt'
@@ -220,6 +239,7 @@ class APNContext
   @handleAPNError : (err,notify)=>
     console.info "Error: #{err}"
     console.info JSON.stringify notify
+    _status.errors++
     if notify?._ctx
       notify._ctx._status.lastError = "APNServer error: "+ err
       if err == 8
@@ -258,6 +278,10 @@ class APNContext
     if ctx = @_activeContexts[acc._id]
       ctx.stop()
     delete @_activeContexts[acc._id]
+    try
+      acc.remove()
+    catch e
+      console.info(e)
 
 schema = db.Schema
   udid:
@@ -325,23 +349,26 @@ app.use express.bodyParser()
 app.get '/', (req,resp) ->
   resp.redirect 'https://github.com/bearice/ffapn'
 
-app.get '/test/:token', (req,resp) ->
-    msg =
-        'loc-key': 'TEST_NOTIFICATION_MESSAGE'
-        'loc-args': []
-    info =
-        type: 'test'
-        id: Date.now()
-    note = new apns.Notification()
-    note.encoding = 'utf8'
-    note.expiry = Math.floor(Date.now() / 1000) + 3600
-    note.sound = "default"
-    note.alert = msg
-    note.payload = info
-    note.device = new apns.Device(req.params.token)
+app.get '/status', (req,resp) ->
+  getStatus resp.send.bind resp
 
-    APNContext._conn.sendNotification(note)
-    resp.send {msg:"ok"}
+app.get '/test/:token', (req,resp) ->
+  msg =
+    'loc-key': 'TEST_NOTIFICATION_MESSAGE'
+    'loc-args': []
+  info =
+    type: 'test'
+    id: Date.now()
+  note = new apns.Notification()
+  note.encoding = 'utf8'
+  note.expiry = Math.floor(Date.now() / 1000) + 3600
+  note.sound = "default"
+  note.alert = msg
+  note.payload = info
+  note.device = new apns.Device(req.params.token)
+
+  APNContext._conn.sendNotification(note)
+  resp.send {msg:"ok"}
 
 app.get '/token/:udid/:user_id', (req,resp) ->
   c = {udid: req.params.udid, user_id: req.params.user_id}
@@ -385,7 +412,7 @@ Account.find (err,arr) ->
     delay = 0
     for obj in arr
       setTimeout APNContext.updateOrCreate.bind(APNContext,obj) ,delay
-      delay += 10
+      delay += 50
 
   console.info "Server started"
   app.listen config.port or 8080, config.bind or "127.0.0.1"
