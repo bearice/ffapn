@@ -26,8 +26,15 @@ getStatus = (fn) ->
   fn _status
 
 class StreamContext extends events.EventEmitter
+  streams = {}
+
+  @getStream = (option) ->
+    uid = @options.user_id
+    if streams[uid] then return streams[uid]
+    streams[uid] = new StreamContext(options)
+
   constructor: (@options) ->
-    @_stop = false
+    @_refcnt = 0
 
   _makeRequest: () ->
     oauth = new OAuth null, null, @options.consumer_token, @options.consumer_secret, "1.0", null, "HMAC-SHA1"
@@ -75,17 +82,19 @@ class StreamContext extends events.EventEmitter
 
   _dispatch: (data)=>
     @emit 'data',data
-    @emit data.event, data
 
   start: () =>
-    return if @_stop
-    req = @_makeRequest()
-    req.on 'response', @_onResponse
-    req.end()
+    @_refcnt++
+    if @_refcnt is 1
+      req = @_makeRequest()
+      req.on 'response', @_onResponse
+      req.end()
 
   stop: ()->
-    @_stop = true
-    @_resp?.destroy()
+    @_refcnt--
+    if @_refcnt is 0
+      @_resp?.destroy()
+      streams[@options.user_id] = null
 
 class APNContext
   constructor: (@options) ->
@@ -95,34 +104,40 @@ class APNContext
       sentNotifications: 0
       lastNotification: 0
 
-    @_stream = new StreamContext @options
     @_device = new apns.Device @options.device_token
     
-    @_stream.on 'message.create', @onMessage
-    @_stream.on 'friends.create', @onNewFollower
-    @_stream.on 'friends.request', @onFriendRequest
-    @_stream.on 'fav.create', @onFavourite
-    @_stream.on 'dm.create', @onPrivateMessage
-
-    @_stream.on 'connect', () =>
-      @_status.streamConnected = true
-
-    @_stream.on 'error', (err) =>
-      @_status.streamConnected = false
-      @_status.lastError = err
-
-  update: (@options) ->
-    @_stream.options = @options
-    @_device = new apns.Device @options.device_token
 
   start: () ->
     _status.live_users++
+    @_stream = StreamContext.getStream @options
+    @_stream.on 'connect', @onStreamConnected
+    @_stream.on 'error', @onStreamError
+    @_stream.on 'data', @onData
     @_stream.start()
 
   stop: () ->
     _status.live_users--
     @_stream.stop()
+    @_stream.removeListener 'connect', @onStreamConnected
+    @_stream.removeListener 'error', @onStreamError
+    @_stream.removeListener 'data', @onData
+    @_stream = null
 
+  onStreamConnected: () =>
+    @_status.streamConnected = true
+
+  onStreamError: () =>
+    @_status.streamConnected = false
+    @_status.lastError = err
+
+  onData: (obj) =>
+    switch obj.event
+      when 'message.create'  then @onMessage obj
+      when 'friends.create'  then @onNewFollower obj
+      when 'friends.request' then @onFriendRequest obj
+      when 'fav.create'      then @onFavourite obj
+      when 'dm.create'       then @onPrivateMessage obj
+    
   onMessage: (evt) =>
     #Filter out events triggered by user
     return if evt.source.id == @options.user_id
@@ -204,6 +219,17 @@ class APNContext
       user: @options.user_id
     @sendNotification msg, info
 
+  onExpiry: () =>
+    msg =
+        'loc-key': 'EXPIRY'
+        'loc-args': []
+    info =
+        type: 'expiry'
+        user: @options.user_id
+
+    @sendNotification msg,info
+    return true
+
   sendNotification: (msg,payload,badge=1) ->
     note = new apns.Notification()
     note.encoding = 'utf8'
@@ -284,9 +310,6 @@ class APNContext
       console.info(e)
 
 schema = db.Schema
-  udid:
-    type: String
-    required: true
   user_id:
     type: String
     required: true
@@ -308,8 +331,15 @@ schema = db.Schema
   flags:
     type: db.Schema.Types.Mixed
     required: true
+  last_seen:
+    type: Date
+    required: true
+    index: true
 
-schema.index user_id:1,udid:1, unique: true
+schema.index {user_id:1, device_token:1}, unique: true
+
+schema.pre 'save',(next) ->
+  @last_seen = new Date unless @last_seen
 
 schema.post 'save',(doc) ->
   APNContext.updateOrCreate doc
@@ -317,6 +347,7 @@ schema.post 'save',(doc) ->
 schema.post 'remove',(doc) ->
   APNContext.removeContext doc
 
+schema.virtual('udid').get () -> @device_token
 schema.virtual('status').get () ->
   @getContext()?._status or "Context removed or not exist"
 
@@ -327,9 +358,11 @@ schema.methods.updateProps = (props) ->
   @schema.eachPath (name) =>
     @[name] = props[name] if props.hasOwnProperty name
 
-schema.methods.toJSON = ()->
+schema.methods.touch = () ->
+  @last_seen = new Date
+
+schema.methods.toJSON = () ->
   id: @_id
-  udid: @_udid
   user_id: @user_id
   device_token: @device_token
   oauth_token: @oauth_token
@@ -338,6 +371,19 @@ schema.methods.toJSON = ()->
   consumer_secret: @consumer_secret
   flags: @flags
   status: @status
+
+schema.statics.purgeAccounts = () ->
+  date = new Date
+  date.setDate(date.getDate() - 7)
+
+  @where('last_seen').lt(date).exec (err,objs) ->
+    if err
+      console.error err
+      return
+    for obj in objs
+      obj.getContext().onExpiry()
+      obj.remove()
+
 Account = db.model 'Account',schema
 
 app = new express
@@ -370,15 +416,15 @@ app.get '/test/:token', (req,resp) ->
   APNContext._conn.sendNotification(note)
   resp.send {msg:"ok"}
 
-app.get '/token/:udid/:user_id', (req,resp) ->
-  c = {udid: req.params.udid, user_id: req.params.user_id}
+app.get '/token/:token/:user_id', (req,resp) ->
+  c = {device_token: req.params.token, user_id: req.params.user_id}
   Account.findOne c, (err,obj) ->
     return resp.send 500,err if err
     return resp.send 404,{msg: 'Not found'} unless obj
     resp.json obj
 
-app.get '/token/:udid/:user_id/test', (req,resp) ->
-  c = {udid: req.params.udid, user_id: req.params.user_id}
+app.get '/token/:token/:user_id/test', (req,resp) ->
+  c = {device_token: req.params.token, user_id: req.params.user_id}
   Account.findOne c, (err,obj) ->
     return resp.send 500,err if err
     return resp.send 404,{msg: 'Not found'} unless obj
@@ -387,19 +433,20 @@ app.get '/token/:udid/:user_id/test', (req,resp) ->
     else
       return resp.json {msg: "failed"}
 
-app.post '/token/:udid/:user_id', (req,resp) ->
+app.post '/token/:token/:user_id', (req,resp) ->
   console.info req.body
-  c = {udid: req.params.udid, user_id: req.params.user_id}
+  c = {device_token: req.params.token, user_id: req.params.user_id}
   Account.findOne c, (err,obj) ->
     return resp.send 500,err if err
     obj = new Account c unless obj
     obj.updateProps req.body
+    obj.touch()
     obj.save (err, obj) ->
       return resp.send 500,err if err
       return resp.send 200,obj
 
-app.delete '/token/:udid/:user_id', (req,resp) ->
-  c = {udid: req.params.udid, user_id: req.params.user_id}
+app.delete '/token/:token/:user_id', (req,resp) ->
+  c = {device_token: req.params.token, user_id: req.params.user_id}
   Account.findOne c, (err,obj) ->
     return resp.send 500,err if err
     return resp.send 404,{msg: 'Not found'} unless obj
@@ -413,6 +460,8 @@ Account.find (err,arr) ->
     for obj in arr
       setTimeout APNContext.updateOrCreate.bind(APNContext,obj) ,delay
       delay += 50
+
+  setInterval Account.purgeAccounts.bind(Account), 3600*1000
 
   console.info "Server started"
   app.listen config.port or 8080, config.bind or "127.0.0.1"

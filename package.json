@@ -12,7 +12,7 @@
         "apn": ">=1.2.5",
         "oauth":">=0.9.8",
         "mongoose":">=3.5.5",
-        "express":"*"
+        "express":">=3.4.0"
     },
     "repository": {
         "type": "git",
